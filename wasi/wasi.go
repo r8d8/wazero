@@ -21,8 +21,11 @@ const (
 )
 
 type WASIEnvironment struct {
-	args  *wasiStringArray
-	stdin io.Reader
+	args *wasiStringArray
+	// environ stores each environment variable in the form of "key=value",
+	// which is convenient for the implementation of environ_get.
+	environ *wasiStringArray
+	stdin   io.Reader
 	stdout,
 	stderr io.Writer
 	opened         map[uint32]fileEntry
@@ -42,11 +45,11 @@ func (w *WASIEnvironment) Register(store *wasm.Store) (err error) {
 		if err != nil {
 			return err
 		}
-		err = store.AddHostFunction(wasiName, "environ_sizes_get", reflect.ValueOf(environ_sizes_get))
+		err = store.AddHostFunction(wasiName, "environ_sizes_get", reflect.ValueOf(w.environ_sizes_get))
 		if err != nil {
 			return err
 		}
-		err = store.AddHostFunction(wasiName, "environ_get", reflect.ValueOf(environ_get))
+		err = store.AddHostFunction(wasiName, "environ_get", reflect.ValueOf(w.environ_get))
 		if err != nil {
 			return err
 		}
@@ -123,7 +126,7 @@ func Stderr(writer io.Writer) Option {
 // wasiStringArray holds null-terminated strings. It ensures that
 // its length and total buffer size don't exceed the max of uint32.
 // Each string can have arbitrary byte values, not only utf-8 encoded text.
-// wasiStringArray are convenience struct for args_get and environ_get. (environ_get is not implemented yet)
+// wasiStringArray are convenience struct for args_get and environ_get.
 //
 // A Null-terminated string is a byte string with a NULL suffix ("\x00").
 // See https://en.wikipedia.org/wiki/Null-terminated_string
@@ -170,6 +173,30 @@ func Args(args []string) (Option, error) {
 	}, nil
 }
 
+// Environ returns an option to set environmental variables to the WASIEnvironment.
+// * keys: the names of environment variables to set
+// * values: the corresponding values of environment variables to set
+// Environ returns an error if the length of the keys and values doesn't match,
+// or the length or the total size of those strings exceed the max of uint32.
+func Environ(keys []string, values []string) (Option, error) {
+	if len(keys) != len(values) {
+		return nil, fmt.Errorf("the length of the keys and the values don't match. len(keys): %v, len(values): %v", len(keys), len(values))
+	}
+	// WASIEnvironment.environ stores the environment variables in the form of "key=value" as WASIStringArray,
+	// which is convenient for the implementation of environ_get.
+	envs := make([]string, len(keys))
+	for i, key := range keys {
+		envs[i] = key + "=" + values[i]
+	}
+	wasiStrings, err := newWASIStringArray(envs)
+	if err != nil {
+		return nil, err
+	}
+	return func(w *WASIEnvironment) {
+		w.environ = wasiStrings
+	}, nil
+}
+
 func Preopen(dir string, fileSys FS) Option {
 	return func(w *WASIEnvironment) {
 		w.opened[uint32(len(w.opened))+3] = fileEntry{
@@ -181,11 +208,12 @@ func Preopen(dir string, fileSys FS) Option {
 
 func NewEnvironment(opts ...Option) *WASIEnvironment {
 	ret := &WASIEnvironment{
-		args:   &wasiStringArray{},
-		stdin:  os.Stdin,
-		stdout: os.Stdout,
-		stderr: os.Stderr,
-		opened: map[uint32]fileEntry{},
+		args:    &wasiStringArray{},
+		environ: &wasiStringArray{},
+		stdin:   os.Stdin,
+		stdout:  os.Stdout,
+		stderr:  os.Stderr,
+		opened:  map[uint32]fileEntry{},
 		getTimeNanosFn: func() uint64 {
 			return uint64(time.Now().UnixNano())
 		},
@@ -396,13 +424,48 @@ func proc_exit(*wasm.HostFunctionCallContext, uint32) {
 	// not implemented yet
 }
 
-func environ_sizes_get(*wasm.HostFunctionCallContext, uint32, uint32) (err Errno) {
-	// not implemented yet
-	return
+// environ_sizes_get is a WASI API that returns the number of the environment variables and the total buffer size that
+// environ_get API will require to store the value of the environment variables.
+// * environCountPtr: a pointer to an address of uint32 type. The number of the environment variable is written there.
+// * environBufSizePtr: a pointer to an address of uint32 type. The total size of the buffer that the environment variable data requires is written there.
+//
+// See https://github.com/WebAssembly/WASI/blob/snapshot-01/phases/snapshot/docs.md#-environ_sizes_get---errno-size-size
+func (w *WASIEnvironment) environ_sizes_get(ctx *wasm.HostFunctionCallContext, environCountPtr uint32, environBufSizePtr uint32) (err Errno) {
+	if !ctx.Memory.PutUint32(environCountPtr, uint32(len(w.environ.nullTerminatedValues))) {
+		return EINVAL
+	}
+	if !ctx.Memory.PutUint32(environBufSizePtr, w.environ.totalBufSize) {
+		return EINVAL
+	}
+
+	return ESUCCESS
 }
 
-func environ_get(*wasm.HostFunctionCallContext, uint32, uint32) (err Errno) {
-	return
+// environ_get is a WASI API to read the environment variable data.
+// * environPtr:
+//     A pointer to a buffer. environ_get writes multiple *C.char pointers in sequence there. In other words, this is an array of *char in C.
+//     The pointers point to environment variables. Each environment variable is a key/value pair joined with `=`, and it is a null-terminated string.
+//     The number of the environment variables matches the value that environ_sizes_get returns.
+// * environBufPtr:
+//     A pointer to a buffer. envrion_get writes the environment variables as null-terminated strings in the given buffer.
+//     The total number of bytes written there is the value that args_sizes_get returns in argsBufSizePtr. The caller must ensure that
+//     the buffer has the enough size.
+//     Each *C.char pointer that can be obtained from environPtr points to the beginning of each of these null-terminated strings.
+// See https://github.com/WebAssembly/WASI/blob/snapshot-01/phases/snapshot/docs.md#-args_getargv-pointerpointeru8-argv_buf-pointeru8---errno
+// See https://en.wikipedia.org/wiki/Null-terminated_string
+func (w *WASIEnvironment) environ_get(ctx *wasm.HostFunctionCallContext, environPtr uint32, environBufPtr uint32) (err Errno) {
+	if !ctx.Memory.ValidateAddrRange(environPtr, uint64(len(w.environ.nullTerminatedValues))*4) /* 4 is the size of uint32 */ ||
+		!ctx.Memory.ValidateAddrRange(environBufPtr, uint64(w.environ.totalBufSize)) {
+		return EINVAL
+	}
+	// w.environ holds the environment variables in the form of "key=val\x00", so just copies it to the linear memory.
+	for _, env := range w.environ.nullTerminatedValues {
+		binary.LittleEndian.PutUint32(ctx.Memory.Buffer[environPtr:], environBufPtr)
+		environPtr += 4 // size of uint32
+		environBufPtr += uint32(copy(ctx.Memory.Buffer[environBufPtr:], env))
+	}
+
+	return ESUCCESS
 }
 
 // clock_time_get is a WASI API that returns the time value of a clock. Note: This is similar to clock_gettime in POSIX.
