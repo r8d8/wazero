@@ -46,7 +46,7 @@ func TestFuncParser(t *testing.T) {
 
 		t.Run(tc.name, func(t *testing.T) {
 			var parsedCode *wasm.Code
-			var setFunc onFunc = func(typeIdx wasm.Index, code *wasm.Code, name string, localNames wasm.NameMap) (tokenParser, error) {
+			var setFunc onFunc = func(typeIdx wasm.Index, code *wasm.Code, localNames wasm.NameMap) (tokenParser, error) {
 				parsedCode = code
 				return parseErr, nil
 			}
@@ -102,7 +102,7 @@ func TestFuncParser_Call_Unresolved(t *testing.T) {
 
 		t.Run(tc.name, func(t *testing.T) {
 			var parsedCode *wasm.Code
-			var setFunc onFunc = func(typeIdx wasm.Index, code *wasm.Code, name string, localNames wasm.NameMap) (tokenParser, error) {
+			var setFunc onFunc = func(typeIdx wasm.Index, code *wasm.Code, localNames wasm.NameMap) (tokenParser, error) {
 				parsedCode = code
 				return parseErr, nil
 			}
@@ -159,7 +159,7 @@ func TestFuncParser_Call_Resolved(t *testing.T) {
 			funcNamespace.count++
 
 			var parsedCode *wasm.Code
-			var setFunc onFunc = func(typeIdx wasm.Index, code *wasm.Code, name string, localNames wasm.NameMap) (tokenParser, error) {
+			var setFunc onFunc = func(typeIdx wasm.Index, code *wasm.Code, localNames wasm.NameMap) (tokenParser, error) {
 				parsedCode = code
 				return parseErr, nil
 			}
@@ -227,7 +227,7 @@ func TestFuncParser_Errors(t *testing.T) {
 	}
 }
 
-var failOnFunc onFunc = func(typeIdx wasm.Index, code *wasm.Code, name string, localNames wasm.NameMap) (tokenParser, error) {
+var failOnFunc onFunc = func(typeIdx wasm.Index, code *wasm.Code, localNames wasm.NameMap) (tokenParser, error) {
 	return nil, errors.New("unexpected to call onFunc on error")
 }
 

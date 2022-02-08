@@ -18,15 +18,24 @@ const (
 	positionParam
 	positionResult
 	positionModule
-	positionModuleType
-	positionModuleImport
-	positionModuleImportFunc
-	positionModuleFunc
-	positionModuleMemory
-	positionModuleExport
-	positionModuleExportFunc
-	positionModuleExportMemory
-	positionModuleStart
+	positionImport
+	positionImportFunc
+	positionMemory
+	positionExport
+	positionExportFunc
+	positionExportMemory
+	positionStart
+)
+
+type callbackPosition byte
+
+const (
+	// callbackPositionUnhandledToken is set on a token besides a paren.
+	callbackPositionUnhandledToken callbackPosition = iota
+	// callbackPositionUnhandledField is at the field name (tokenKeyword) which isn't "type", "param" or "result"
+	callbackPositionUnhandledField
+	// callbackPositionEndField is at the end (tokenRParen) of the field enclosing the type use.
+	callbackPositionEndField
 )
 
 type moduleParser struct {
@@ -153,26 +162,26 @@ func (p *moduleParser) beginModuleField(tok tokenType, tokenBytes []byte, _, _ u
 	if tok == tokenKeyword {
 		switch string(tokenBytes) {
 		case "type":
-			p.pos = positionModuleType
+			p.pos = positionType
 			return p.typeParser.begin, nil
 		case "import":
-			p.pos = positionModuleImport
+			p.pos = positionImport
 			return p.parseImportModule, nil
 		case "func":
-			p.pos = positionModuleFunc
+			p.pos = positionFunc
 			p.funcParser.currentIdx = wasm.Index(len(p.module.FunctionSection))
-			return p.funcParser.begin, nil
+			return p.beginFunc, nil
 		case "memory":
-			p.pos = positionModuleMemory
+			p.pos = positionMemory
 			return p.memoryParser.begin, nil
 		case "export":
-			p.pos = positionModuleExport
+			p.pos = positionExport
 			return p.parseExportName, nil
 		case "start":
 			if p.module.StartSection != nil {
 				return nil, errors.New("redundant start")
 			}
-			p.pos = positionModuleStart
+			p.pos = positionStart
 			return p.parseStart, nil
 		default:
 			return nil, unexpectedFieldName(tokenBytes)
@@ -243,9 +252,9 @@ func (p *moduleParser) parseImportModule(tok tokenType, tokenBytes []byte, _, _ 
 // parseImportName returns parseImport after recording the import name, or errs if it couldn't be read.
 //
 // Ex. Import name is present `(import "Math" "PI" (func (result f32)))`
-//                                         starts here --^    ^
-//                                           records PI --^   |
-//                                 parseImport resumes here --+
+//                              starts here --^^   ^
+//                                records PI --+   |
+//                      parseImport resumes here --+
 //
 // Ex. Imported function name is absent `(import "Math" (func (result f32)))`
 //                                          errs here --+
@@ -284,7 +293,7 @@ func (p *moduleParser) beginImportDesc(tok tokenType, tokenBytes []byte, _, _ ui
 
 	switch string(tokenBytes) {
 	case "func":
-		p.pos = positionModuleImportFunc
+		p.pos = positionImportFunc
 		return p.parseImportFuncID, nil
 	case "table", "memory", "global":
 		return nil, fmt.Errorf("TODO: %s", tokenBytes)
@@ -303,17 +312,18 @@ func (p *moduleParser) beginImportDesc(tok tokenType, tokenBytes []byte, _, _ ui
 //                  calls parseImportFunc here --^
 func (p *moduleParser) parseImportFuncID(tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
 	if tok == tokenID { // Ex. $main
-		id, err := p.funcNamespace.setID(tokenBytes)
-		if err != nil {
+		if name, err := p.funcNamespace.setID(tokenBytes); err != nil {
 			return nil, err
+		} else {
+			p.addFunctionName(name)
 		}
-		p.addFunctionName(id)
 		return p.parseImportFunc, nil
 	}
 	return p.parseImportFunc(tok, tokenBytes, line, col)
 }
 
-// addFunctionName appends the current imported or module-defined function name to the wasm.NameSection
+// addFunctionName appends the current imported or module-defined function name to the wasm.NameSection iff it is not
+// empty.
 func (p *moduleParser) addFunctionName(name string) {
 	if name == "" {
 		return // there's no value in an empty name
@@ -342,7 +352,7 @@ func (p *moduleParser) parseImportFunc(tok tokenType, tokenBytes []byte, line, c
 // onImportFunc records the type index and local names of the current imported function, and increments
 // funcNamespace as it is shared across imported and module-defined functions. Finally, this returns parseImportEnd to
 // the current import into the ImportSection.
-func (p *moduleParser) onImportFunc(typeIdx wasm.Index, paramNames wasm.NameMap, pos onTypeUsePosition, tok tokenType, tokenBytes []byte, _, _ uint32) (tokenParser, error) {
+func (p *moduleParser) onImportFunc(typeIdx wasm.Index, paramNames wasm.NameMap, pos callbackPosition, tok tokenType, tokenBytes []byte, _, _ uint32) (tokenParser, error) {
 	i := p.currentModuleField.(*wasm.Import)
 	i.Kind = wasm.ImportKindFunc
 	i.DescFunc = typeIdx
@@ -351,12 +361,12 @@ func (p *moduleParser) onImportFunc(typeIdx wasm.Index, paramNames wasm.NameMap,
 	p.funcNamespace.count++
 
 	switch pos {
-	case onTypeUseUnhandledToken:
+	case callbackPositionUnhandledToken:
 		return nil, unexpectedToken(tok, tokenBytes)
-	case onTypeUseUnhandledField:
+	case callbackPositionUnhandledField:
 		return nil, unexpectedFieldName(tokenBytes)
-	case onTypeUseEndField:
-		p.pos = positionModuleImport
+	case callbackPositionEndField:
+		p.pos = positionImport
 		return p.parseImportEnd, nil
 	}
 	return p.parseImportFuncEnd, nil
@@ -368,7 +378,7 @@ func (p *moduleParser) parseImportFuncEnd(tok tokenType, tokenBytes []byte, _, _
 		return nil, unexpectedToken(tok, tokenBytes)
 	}
 
-	p.pos = positionModuleImport
+	p.pos = positionImport
 	return p.parseImportEnd, nil
 }
 
@@ -392,10 +402,32 @@ func (p *moduleParser) parseImportEnd(tok tokenType, tokenBytes []byte, _, _ uin
 	return p.parseModule, nil
 }
 
+// beginFunc should be called after reaching the "func" keyword in a module field. Parsing continues until onFunc or
+// error.
+//
+// This stage records the ID of the current function, if present, and resumes with onFunc.
+//
+// Ex. A func ID is present `(func $main nop)`
+//                  records main --^     ^
+//              parseFunc resumes here --+
+//
+// Ex. No func ID `(func nop)`
+//     calls parseFunc --^
+func (p *moduleParser) beginFunc(tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
+	if tok == tokenID { // Ex. $main
+		if id, err := p.funcNamespace.setID(tokenBytes); err != nil {
+			return nil, err
+		} else {
+			p.addFunctionName(id)
+		}
+		return p.funcParser.begin, nil
+	}
+	return p.funcParser.begin(tok, tokenBytes, line, col)
+}
+
 // endFunc adds the type index, code and local names for the current function, and increments funcNamespace as it is
 // shared across imported and module-defined functions. Finally, this returns parseModule to prepare for the next field.
-func (p *moduleParser) endFunc(typeIdx wasm.Index, code *wasm.Code, name string, localNames wasm.NameMap) (tokenParser, error) {
-	p.addFunctionName(name)
+func (p *moduleParser) endFunc(typeIdx wasm.Index, code *wasm.Code, localNames wasm.NameMap) (tokenParser, error) {
 	p.module.FunctionSection = append(p.module.FunctionSection, typeIdx)
 	p.module.CodeSection = append(p.module.CodeSection, code)
 	p.addLocalNames(localNames)
@@ -464,10 +496,10 @@ func (p *moduleParser) beginExportDesc(tok tokenType, tokenBytes []byte, _, _ ui
 
 	switch string(tokenBytes) {
 	case "func":
-		p.pos = positionModuleExportFunc
+		p.pos = positionExportFunc
 		return p.parseExportDesc, nil
 	case "memory":
-		p.pos = positionModuleExportMemory
+		p.pos = positionExportMemory
 		return p.parseExportDesc, nil
 	case "table", "global":
 		return nil, fmt.Errorf("TODO: %s", tokenBytes)
@@ -481,10 +513,10 @@ func (p *moduleParser) parseExportDesc(tok tokenType, tokenBytes []byte, line, c
 	var namespace *indexNamespace
 	e := p.currentModuleField.(*wasm.Export)
 	switch p.pos {
-	case positionModuleExportFunc:
+	case positionExportFunc:
 		e.Kind = wasm.ExportKindFunc
 		namespace = p.funcNamespace
-	case positionModuleExportMemory:
+	case positionExportMemory:
 		e.Kind = wasm.ExportKindMemory
 		namespace = p.memoryNamespace
 	default:
@@ -514,7 +546,7 @@ func (p *moduleParser) parseExportDescEnd(tok tokenType, tokenBytes []byte, _, _
 	case tokenUN, tokenID:
 		return nil, errors.New("redundant index")
 	case tokenRParen:
-		p.pos = positionModuleExport
+		p.pos = positionExport
 		return p.parseExportEnd, nil
 	default:
 		return nil, unexpectedToken(tok, tokenBytes)
@@ -612,10 +644,10 @@ func (p *moduleParser) resolveFunctionIndices(module *wasm.Module) error {
 // This errs if any type index is unresolved, out of range or mismatches an inlined type use signature.
 func (p *moduleParser) resolveTypeUses(module *wasm.Module) error {
 	inlinedToRealIdx := p.addInlinedTypes()
-	return p.resolveInlined(module, inlinedToRealIdx)
+	return p.resolveInlinedTypes(module, inlinedToRealIdx)
 }
 
-func (p *moduleParser) resolveInlined(module *wasm.Module, inlinedToRealIdx map[wasm.Index]wasm.Index) error {
+func (p *moduleParser) resolveInlinedTypes(module *wasm.Module, inlinedToRealIdx map[wasm.Index]wasm.Index) error {
 	// Now look for all the uses of the inlined types and apply the mapping above
 	for _, i := range p.typeUseParser.inlinedTypeIndices {
 		switch i.section {
@@ -699,28 +731,28 @@ func (p *moduleParser) errorContext() string {
 		return ""
 	case positionModule:
 		return "module"
-	case positionModuleType:
+	case positionType:
 		idx := wasm.Index(len(p.module.TypeSection))
 		return fmt.Sprintf("module.type[%d]%s", idx, p.typeParser.errorContext())
-	case positionModuleImport, positionModuleImportFunc: // TODO: table, memory or global
+	case positionImport, positionImportFunc: // TODO: table, memory or global
 		idx := wasm.Index(len(p.module.ImportSection))
-		if p.pos == positionModuleImport {
+		if p.pos == positionImport {
 			return fmt.Sprintf("module.import[%d]", idx)
 		}
 		return fmt.Sprintf("module.import[%d].func%s", idx, p.typeUseParser.errorContext())
-	case positionModuleFunc:
+	case positionFunc:
 		idx := wasm.Index(len(p.module.FunctionSection))
 		return fmt.Sprintf("module.func[%d]%s", idx, p.typeUseParser.errorContext())
-	case positionModuleMemory:
+	case positionMemory:
 		idx := wasm.Index(len(p.module.MemorySection))
 		return fmt.Sprintf("module.memory[%d]", idx)
-	case positionModuleExport, positionModuleExportFunc: // TODO: table, memory or global
+	case positionExport, positionExportFunc: // TODO: table, memory or global
 		idx := wasm.Index(len(p.module.ExportSection))
-		if p.pos == positionModuleExport {
+		if p.pos == positionExport {
 			return fmt.Sprintf("module.export[%d]", idx)
 		}
 		return fmt.Sprintf("module.export[%d].func", idx)
-	case positionModuleStart:
+	case positionStart:
 		return "module.start"
 	default: // parserPosition is an enum, we expect to have handled all cases above. panic if we didn't
 		panic(fmt.Errorf("BUG: unhandled parsing state on errorContext: %v", p.pos))

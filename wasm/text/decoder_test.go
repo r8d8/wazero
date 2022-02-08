@@ -2097,13 +2097,13 @@ func TestModuleParser_ErrorContext(t *testing.T) {
 	}{
 		{input: "initial", pos: positionInitial, expected: ""},
 		{input: "module", pos: positionModule, expected: "module"},
-		{input: "module import", pos: positionModuleImport, expected: "module.import[0]"},
-		{input: "module import func", pos: positionModuleImportFunc, expected: "module.import[0].func"},
-		{input: "module func", pos: positionModuleFunc, expected: "module.func[0]"},
-		{input: "module memory", pos: positionModuleMemory, expected: "module.memory[0]"},
-		{input: "module export", pos: positionModuleExport, expected: "module.export[0]"},
-		{input: "module export func", pos: positionModuleExportFunc, expected: "module.export[0].func"},
-		{input: "start", pos: positionModuleStart, expected: "module.start"},
+		{input: "module import", pos: positionImport, expected: "module.import[0]"},
+		{input: "module import func", pos: positionImportFunc, expected: "module.import[0].func"},
+		{input: "module func", pos: positionFunc, expected: "module.func[0]"},
+		{input: "module memory", pos: positionMemory, expected: "module.memory[0]"},
+		{input: "module export", pos: positionExport, expected: "module.export[0]"},
+		{input: "module export func", pos: positionExportFunc, expected: "module.export[0].func"},
+		{input: "start", pos: positionStart, expected: "module.start"},
 	}
 
 	for _, tt := range tests {
