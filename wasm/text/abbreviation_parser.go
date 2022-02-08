@@ -14,14 +14,12 @@ func newAbbreviationParser(module *wasm.Module, indexNamespace *indexNamespace) 
 // onAbbreviations is invoked when the grammar "(export)* (import)? (export)*" completes.
 //
 // * name is the tokenID field stripped of '$' prefix
-// * exports are nil unless there was at least one "export" field. When set, this includes possibly empty Name field.
+// * exports are nil unless there was at least one "export" field. These are keys of wasm.Module ExportSection.
 // * i is nil unless there was only one "import" field. When set, this includes possibly empty Module and Name fields.
 // * pos is the context used to determine which tokenParser to return
 //
-// Note: this is called when neither an "export" nor "import" field are parsed, or on any field following an "export"
-// that is not an "import": pos clarifies this.
-// Note: this signature returns references instead of strings because empty names are permitted. This allows us to
-// differentiate no exports from one that has an empty name.
+// Note: this is called when neither an "import" nor "export" field are parsed, or on any subsequent field that is
+// neither "import" nor "export": pos clarifies this.
 type onAbbreviations func(name string, i *wasm.Import, exports []string, pos callbackPosition, tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error)
 
 // abbreviationParser parses any abbreviated imports or exports from a field such "func" and calls onAbbreviations.
