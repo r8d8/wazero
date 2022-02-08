@@ -68,8 +68,27 @@ func TestNewWasiStringArray(t *testing.T) {
 }
 
 // argsWat is a wasm module to call args_get and args_sizes_get.
-//go:embed testdata/args.wat
-var argsWat []byte
+var argsWat = []byte(`
+(module
+  (import "wasi_snapshot_preview1" "args_sizes_get" (func $wasi_args_sizes_get (param i32 i32) (result i32)))
+  (import "wasi_snapshot_preview1" "args_get"       (func $wasi_args_get (param i32 i32) (result i32)))
+  (memory 1)  ;; just an arbitrary size big enough for tests
+  (export "memory" (memory 0))
+  ;; Define proxy functions to let the host test code to call the API
+  (func $args_sizes_get (param i32 i32) (result i32)
+        local.get 0
+        local.get 1
+        call $wasi_args_sizes_get
+        )
+  (func $args_get (param i32 i32) (result i32)
+        local.get 0
+        local.get 1
+        call $wasi_args_get
+        )
+  (export "args_sizes_get" (func $args_sizes_get))
+  (export "args_get" (func $args_get))
+  )
+`)
 
 // common test cases used by TestWASIEnvironment_args_sizes_get and TestWASIEnvironment_args_get
 var argsTests = []struct {
@@ -304,8 +323,21 @@ func instantiateWasmStore(t *testing.T, wat []byte, moduleName string, wasiEnv *
 }
 
 // clockWat is a wasm module to call clock_time_get.
-//go:embed testdata/clock.wat
-var clockWat []byte
+var clockWat = []byte(`
+(module
+  (import "wasi_snapshot_preview1" "clock_time_get" (func $wasi_clock_time_get (param i32 i64 i32) (result i32)))
+  (memory 1)  ;; just an arbitrary size big enough for tests
+  (export "memory" (memory 0))
+  ;; Define proxy functions to let the host test code to call the API
+  (func $clock_time_get (param i32 i64 i32) (result i32)
+        local.get 0
+        local.get 1
+        local.get 2
+        call $wasi_clock_time_get
+        )
+  (export "clock_time_get" (func $clock_time_get))
+  )
+`)
 
 func TestWASIEnvironment_clock_time_get(t *testing.T) {
 	ctx := context.Background()
