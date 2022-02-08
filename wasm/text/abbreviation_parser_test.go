@@ -145,6 +145,16 @@ func runAbbreviationParserTests(t *testing.T, tests []*abbreviationParserTest, t
 func TestAbbreviationParser_Errors(t *testing.T) {
 	tests := []struct{ name, source, expectedErr string }{
 		{
+			name:        "second ID",
+			source:      `($x $y (import "m" "n"))`,
+			expectedErr: "1:5: redundant ID: $y",
+		},
+		{
+			name:        "existing ID",
+			source:      `($existingID (import "m" "n"))`,
+			expectedErr: "1:2: duplicate ID $existingID",
+		},
+		{
 			name:        "not import",
 			source:      `(($import "m" "n"))`,
 			expectedErr: "1:3: unexpected ID: $import",
@@ -180,11 +190,6 @@ func TestAbbreviationParser_Errors(t *testing.T) {
 			expectedErr: "1:10: unexpected ID: $i",
 		},
 		{
-			name:        "import second ID",
-			source:      `($x $y (import "m" "n"))`,
-			expectedErr: "1:5: redundant ID: $y",
-		},
-		{
 			name:        "import redundant name",
 			source:      `((import "m" "n" "o"))`,
 			expectedErr: `1:18: redundant name "o"`,
@@ -215,11 +220,6 @@ func TestAbbreviationParser_Errors(t *testing.T) {
 			expectedErr: "1:24: unexpected ID: $e2",
 		},
 		{
-			name:        "export second ID",
-			source:      `($x $y (export "e1"))`,
-			expectedErr: "1:5: redundant ID: $y",
-		},
-		{
 			name:        "export duplicate name",
 			source:      `((export "e") (export "e"))`,
 			expectedErr: `1:23: duplicate name "e"`,
@@ -240,7 +240,10 @@ func TestAbbreviationParser_Errors(t *testing.T) {
 		tc := tt
 
 		t.Run(tc.name, func(t *testing.T) {
-			err := parseAbbreviation(newAbbreviationParser(&wasm.Module{}, newIndexNamespace()), tc.source, failOnAbbreviations)
+			namespace := newIndexNamespace()
+			_, err := namespace.setID([]byte("$existingID"))
+			require.NoError(t, err)
+			err = parseAbbreviation(newAbbreviationParser(&wasm.Module{}, namespace), tc.source, failOnAbbreviations)
 			require.EqualError(t, err, tc.expectedErr)
 		})
 	}
