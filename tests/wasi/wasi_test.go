@@ -78,3 +78,61 @@ func Test_ArgsSizesGet_ArgsGet(t *testing.T) {
 		})
 	}
 }
+
+//go:embed testdata/environ.wasm
+var environWasm []byte
+
+// Test environ_sizes_get and environ_get. environ_sizes_get must be used to know the length and the
+// size of the result of environ_get, so TinyGo calls the both of them together to retrieve the
+// WASI's environment variables. Any other language runtime would do the same things.
+func Test_environ_sizes_get_environ_get(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name            string
+		keys            []string
+		values          []string
+		expectedEnviron string
+	}{
+		{
+			name:            "empty",
+			keys:            []string{},
+			values:          []string{},
+			expectedEnviron: "os.Environ: []",
+		},
+		{
+			name:            "simple",
+			keys:            []string{"foo", "bar", "baz"},
+			values:          []string{"FOO", "", "FOOBAR"},
+			expectedEnviron: "os.Environ: [foo=FOO bar= baz=FOOBAR]",
+		},
+	}
+
+	mod, err := wbinary.DecodeModule(environWasm)
+	require.NoError(t, err)
+
+	for _, tt := range tests {
+		tc := tt
+
+		t.Run(tc.name, func(t *testing.T) {
+			store := wasm.NewStore(interpreter.NewEngine())
+			require.NoError(t, err)
+
+			stdoutBuf := bytes.NewBuffer(nil)
+			envOpt, err := wasi.Environ(tc.keys, tc.values)
+			require.NoError(t, err)
+			wasiEnv := wasi.NewEnvironment(envOpt, wasi.Stdout(stdoutBuf))
+
+			err = wasiEnv.Register(store)
+			require.NoError(t, err)
+
+			err = store.Instantiate(mod, "test")
+			require.NoError(t, err)
+
+			// Calling `_start` to call WASI APIs because it's the only stable way to call WASI APIs on TinyGo.
+			_, _, err = store.CallFunction(ctx, "test", "_start")
+			require.NoError(t, err)
+
+			require.Equal(t, tc.expectedEnviron, strings.TrimSpace(stdoutBuf.String()))
+		})
+	}
+}
