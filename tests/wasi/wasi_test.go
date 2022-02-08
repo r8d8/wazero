@@ -30,7 +30,7 @@ var argsWasm []byte
 // Test args_sizes_get and args_get. args_sizes_get must be used to know the length and the
 // size of the result of args_get, so TinyGo calls the both of them together to retrieve the
 // WASI's arguments. Any other language runtime would do the same things.
-func Test_ArgsSizesGet_ArgsGet(t *testing.T) {
+func Test_args_sizes_get_args_get(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name         string

@@ -71,7 +71,7 @@ func TestNewWasiStringArray(t *testing.T) {
 //go:embed testdata/args.wat
 var argsWat []byte
 
-func TestArgsAPISucceed(t *testing.T) {
+func TestWASIEnvironment_args_sizes_get_args_get_Succeed(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name            string
@@ -176,7 +176,7 @@ func TestArgsAPISucceed(t *testing.T) {
 	}
 }
 
-func TestArgsSizesGetReturnError(t *testing.T) {
+func TestWASIEnvironment_args_sizes_get_ReturnError(t *testing.T) {
 	ctx := context.Background()
 	dummyArgs := []string{"foo", "bar", "baz"}
 	argsOpt, err := Args(dummyArgs)
@@ -225,7 +225,7 @@ func TestArgsSizesGetReturnError(t *testing.T) {
 	}
 }
 
-func TestArgsGetAPIReturnError(t *testing.T) {
+func TestWASIEnvironment_args_get_ReturnError(t *testing.T) {
 	ctx := context.Background()
 	dummyArgs := []string{"foo", "bar", "baz"}
 	argsOpt, err := Args(dummyArgs)
@@ -295,7 +295,7 @@ func instantiateWasmStore(t *testing.T, wat []byte, moduleName string, wasiEnv *
 //go:embed testdata/clock.wat
 var clockWat []byte
 
-func TestClockGetTime(t *testing.T) {
+func TestWASIEnvironment_clock_time_get(t *testing.T) {
 	ctx := context.Background()
 	wasiEnv := NewEnvironment()
 	store := instantiateWasmStore(t, clockWat, "test", wasiEnv)
