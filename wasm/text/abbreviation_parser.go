@@ -11,7 +11,7 @@ func newAbbreviationParser(module *wasm.Module, indexNamespace *indexNamespace) 
 	return &abbreviationParser{module: module, indexNamespace: indexNamespace}
 }
 
-// onAbbreviations is invoked when the grammar "(export)* (import)?" completes.
+// onAbbreviations is invoked when the grammar "(export)* (import)? (export)*" completes.
 //
 // * name is the tokenID field stripped of '$' prefix
 // * exports are nil unless there was at least one "export" field. When set, this includes possibly empty Name field.
