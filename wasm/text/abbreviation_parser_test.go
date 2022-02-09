@@ -76,23 +76,26 @@ var abbreviationParserTests = []*abbreviationParserTest{
 }
 
 func TestAbbreviationParser_InlinesTypesWhenNotYetAdded(t *testing.T) {
-	runAbbreviationParserTests(t, abbreviationParserTests, func(tc *abbreviationParserTest) *abbreviationParser {
-		return newAbbreviationParser(&wasm.Module{}, newIndexNamespace())
+	runAbbreviationParserTests(t, abbreviationParserTests, func(tc *abbreviationParserTest, onAbbreviations onAbbreviations) *abbreviationParser {
+		return newAbbreviationParser(&wasm.Module{}, newIndexNamespace(), onAbbreviations)
 	})
 }
 
 func TestAbbreviationParser_BeginResets(t *testing.T) {
-	runAbbreviationParserTests(t, abbreviationParserTests, func(tc *abbreviationParserTest) *abbreviationParser {
-		tp := newAbbreviationParser(&wasm.Module{}, newIndexNamespace())
+	runAbbreviationParserTests(t, abbreviationParserTests, func(tc *abbreviationParserTest, onAbbreviations onAbbreviations) *abbreviationParser {
+		// To ensure reset works, we need to feed data into the parser. This data isn't under test, so ignore callbacks.
+		tp := newAbbreviationParser(&wasm.Module{}, newIndexNamespace(), ignoreAbbreviations)
 		// inline import/exportNames that uses all fields. Intentionally don't use the same ID or export name!
-		require.NoError(t, parseAbbreviation(tp, `($z (import "m" "n") (export "e3") (export "e4"))`, ignoreAbbreviation))
+		require.NoError(t, parseAbbreviations(tp, `($z (import "m" "n") (export "e3") (export "e4"))`))
 		source := strings.ReplaceAll(strings.ReplaceAll(tc.source, "$x", "$y"), `"e`, `"d`)
-		require.NoError(t, parseAbbreviation(tp, source, ignoreAbbreviation))
+		require.NoError(t, parseAbbreviations(tp, source))
+		// Reset to the intended callback
+		tp.onAbbreviations = onAbbreviations
 		return tp
 	})
 }
 
-type abbreviationTestFunc func(tc *abbreviationParserTest) *abbreviationParser
+type abbreviationTestFunc func(tc *abbreviationParserTest, onAbbreviations onAbbreviations) *abbreviationParser
 
 // To prevent having to maintain a lot of tests to cover the necessary dimensions, this generates combinations that
 // can happen in a type use.
@@ -136,7 +139,7 @@ func runAbbreviationParserTests(t *testing.T, tests []*abbreviationParserTest, t
 				return p.parse, nil
 			}
 
-			require.NoError(t, parseAbbreviation(tp(tc), tc.source, setAbbreviation))
+			require.NoError(t, parseAbbreviations(tp(tc, setAbbreviation), tc.source))
 			require.Equal(t, tc.expectedTrailingTokens, p.tokenTypes)
 		})
 	}
@@ -243,13 +246,13 @@ func TestAbbreviationParser_Errors(t *testing.T) {
 			namespace := newIndexNamespace()
 			_, err := namespace.setID([]byte("$existingID"))
 			require.NoError(t, err)
-			err = parseAbbreviation(newAbbreviationParser(&wasm.Module{}, namespace), tc.source, failOnAbbreviations)
+			err = parseAbbreviations(newAbbreviationParser(&wasm.Module{}, namespace, failOnAbbreviations), tc.source)
 			require.EqualError(t, err, tc.expectedErr)
 		})
 	}
 }
 
-var ignoreAbbreviation onAbbreviations = func(name string, i *wasm.Import, exportNames []string, pos callbackPosition, tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
+var ignoreAbbreviations onAbbreviations = func(name string, i *wasm.Import, exportNames []string, pos callbackPosition, tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
 	return parseNoop, nil
 }
 
@@ -257,12 +260,8 @@ var failOnAbbreviations onAbbreviations = func(name string, i *wasm.Import, expo
 	return nil, errors.New("unexpected to call onAbbreviations on error")
 }
 
-func parseAbbreviation(tp *abbreviationParser, source string, onAbbreviations onAbbreviations) error {
-	var parser tokenParser = func(tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
-		return tp.begin(onAbbreviations, tok, tokenBytes, line, col)
-	}
-
-	line, col, err := lex(skipTokens(1, parser), []byte(source))
+func parseAbbreviations(tp *abbreviationParser, source string) error {
+	line, col, err := lex(skipTokens(1, tp.begin), []byte(source))
 	if err != nil {
 		err = &FormatError{Line: line, Col: col, cause: err}
 	}

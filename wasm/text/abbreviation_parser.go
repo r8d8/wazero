@@ -7,8 +7,8 @@ import (
 	"github.com/tetratelabs/wazero/wasm"
 )
 
-func newAbbreviationParser(module *wasm.Module, indexNamespace *indexNamespace) *abbreviationParser {
-	return &abbreviationParser{module: module, indexNamespace: indexNamespace}
+func newAbbreviationParser(module *wasm.Module, indexNamespace *indexNamespace, onAbbreviations onAbbreviations) *abbreviationParser {
+	return &abbreviationParser{module: module, indexNamespace: indexNamespace, onAbbreviations: onAbbreviations}
 }
 
 // onAbbreviations is invoked when the grammar "(export)* (import)? (export)*" completes.
@@ -70,7 +70,7 @@ type abbreviationParser struct {
 //         beginImportOrExport starts here --^              ^
 //                           onAbbreviations resumes here --+
 //
-func (p *abbreviationParser) begin(onAbbreviations onAbbreviations, tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
+func (p *abbreviationParser) begin(tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
 	pos := callbackPositionUnhandledToken
 	p.pos = positionInitial // to ensure errorContext reports properly
 	switch tok {
@@ -78,15 +78,13 @@ func (p *abbreviationParser) begin(onAbbreviations onAbbreviations, tok tokenTyp
 		if err := p.setID(tokenBytes); err != nil {
 			return nil, err
 		}
-		p.onAbbreviations = onAbbreviations
 		return p.parseMoreImportOrExports, nil
 	case tokenLParen:
-		p.onAbbreviations = onAbbreviations
 		return p.beginImportOrExport, nil
 	case tokenRParen:
 		pos = callbackPositionEndField
 	}
-	return onAbbreviations("", nil, nil, pos, tok, tokenBytes, line, col)
+	return p.onAbbreviations("", nil, nil, pos, tok, tokenBytes, line, col)
 }
 
 // setID adds the current ID into the indexNamespace. This errs when the ID was already in use.

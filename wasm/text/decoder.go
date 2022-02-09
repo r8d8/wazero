@@ -68,6 +68,10 @@ type moduleParser struct {
 	// resolved here (without the '$' prefix).
 	funcNamespace *indexNamespace
 
+	// funcAbbreviationParser handles inlined "import" and "export" fields. Ex. (func $main (export "main"))
+	// See https://www.w3.org/TR/wasm-core-1/#abbreviations%E2%91%A8
+	funcAbbreviationParser *abbreviationParser
+
 	// funcParser parses the CodeSection for a given module-defined function.
 	funcParser *funcParser
 
@@ -130,6 +134,7 @@ func newModuleParser(module *wasm.Module) *moduleParser {
 	}
 	p.typeParser = newTypeParser(p.typeNamespace, p.onTypeEnd)
 	p.typeUseParser = newTypeUseParser(module, p.typeNamespace)
+	p.funcAbbreviationParser = newAbbreviationParser(module, p.funcNamespace, p.onFuncAbbreviations)
 	p.funcParser = newFuncParser(p.typeUseParser, p.funcNamespace, p.endFunc)
 	p.memoryParser = newMemoryParser(p.memoryNamespace, p.endMemory)
 	return &p
@@ -170,7 +175,7 @@ func (p *moduleParser) beginModuleField(tok tokenType, tokenBytes []byte, _, _ u
 		case "func":
 			p.pos = positionFunc
 			p.funcParser.currentIdx = wasm.Index(len(p.module.FunctionSection))
-			return p.beginFunc, nil
+			return p.funcAbbreviationParser.begin, nil
 		case "memory":
 			p.pos = positionMemory
 			return p.memoryParser.begin, nil
@@ -352,7 +357,7 @@ func (p *moduleParser) parseImportFunc(tok tokenType, tokenBytes []byte, line, c
 // onImportFunc records the type index and local names of the current imported function, and increments
 // funcNamespace as it is shared across imported and module-defined functions. Finally, this returns parseImportEnd to
 // the current import into the ImportSection.
-func (p *moduleParser) onImportFunc(typeIdx wasm.Index, paramNames wasm.NameMap, pos callbackPosition, tok tokenType, tokenBytes []byte, _, _ uint32) (tokenParser, error) {
+func (p *moduleParser) onImportFunc(typeIdx wasm.Index, paramNames wasm.NameMap, pos callbackPosition, tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
 	i := p.currentModuleField.(*wasm.Import)
 	i.Kind = wasm.ImportKindFunc
 	i.DescFunc = typeIdx
@@ -366,9 +371,13 @@ func (p *moduleParser) onImportFunc(typeIdx wasm.Index, paramNames wasm.NameMap,
 	case callbackPositionUnhandledField:
 		return nil, unexpectedFieldName(tokenBytes)
 	case callbackPositionEndField:
+		if p.pos == positionFunc { // inlined
+			return p.parseImportEnd(tok, tokenBytes, line, col)
+		}
 		p.pos = positionImport
 		return p.parseImportEnd, nil
 	}
+
 	return p.parseImportFuncEnd, nil
 }
 
@@ -402,27 +411,64 @@ func (p *moduleParser) parseImportEnd(tok tokenType, tokenBytes []byte, _, _ uin
 	return p.parseModule, nil
 }
 
-// beginFunc should be called after reaching the "func" keyword in a module field. Parsing continues until onFunc or
-// error.
-//
-// This stage records the ID of the current function, if present, and resumes with onFunc.
-//
-// Ex. A func ID is present `(func $main nop)`
-//                  records main --^     ^
-//              parseFunc resumes here --+
-//
-// Ex. No func ID `(func nop)`
-//     calls parseFunc --^
-func (p *moduleParser) beginFunc(tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
-	if tok == tokenID { // Ex. $main
-		if id, err := p.funcNamespace.setID(tokenBytes); err != nil {
-			return nil, err
-		} else {
-			p.addFunctionName(id)
-		}
-		return p.funcParser.begin, nil
+func (p *moduleParser) onFuncAbbreviations(name string, i *wasm.Import, exports []string, pos callbackPosition, tok tokenType, tokenBytes []byte, line, col uint32) (tokenParser, error) {
+	p.addFunctionName(name)
+	if exports != nil {
+		return nil, errors.New("TODO: onFuncAbbreviations. exports")
 	}
-	return p.funcParser.begin(tok, tokenBytes, line, col)
+
+	section := wasm.SectionIDFunction
+	idx := p.funcParser.currentIdx
+	if i != nil { // this is not a module-defined function, rather an inlined import.
+		// We know the module and function name, but still need the type use.
+		// Ex. (func (import "math" "pi") (type 0))
+		//                         here --^
+		section = wasm.SectionIDImport
+		idx = wasm.Index(len(p.module.ImportSection))
+		i.Kind = wasm.ImportKindFunc
+	}
+
+	if pos == callbackPositionEndField {
+		typeIdx := p.typeUseParser.emptyTypeIndex(section, idx)
+		if i != nil {
+			i.DescFunc = typeIdx
+			p.module.ImportSection = append(p.module.ImportSection, i)
+		} else {
+			p.module.FunctionSection = append(p.module.FunctionSection, typeIdx)
+			p.module.CodeSection = append(p.module.CodeSection, codeEnd)
+		}
+
+		// Multiple funcs are allowed, so advance in case there's a next.
+		p.funcNamespace.count++
+		p.pos = positionModule
+		return p.parseModule, nil
+	}
+
+	afterTypeUse := p.funcParser.afterTypeUse
+	if i != nil { // this is not a module-defined function, rather an inlined import.
+		// We know the module and function name, but still need the type use.
+		// Ex. (func (import "math" "pi") (type 0))
+		//                         here --^
+		p.currentModuleField = i
+		afterTypeUse = p.onImportFunc
+	}
+
+	// TODO: this is horrible
+	switch pos {
+	case callbackPositionUnhandledToken:
+		typeIdx := p.typeUseParser.emptyTypeIndex(section, idx)
+		return afterTypeUse(typeIdx, nil, pos, tok, tokenBytes, line, col)
+	case callbackPositionUnhandledField:
+		p.typeUseParser.section = section
+		p.typeUseParser.idx = idx
+		p.typeUseParser.onTypeUse = afterTypeUse
+		return p.typeUseParser.beginTypeParamOrResult(tok, tokenBytes, line, col)
+	case callbackPositionEndField:
+		typeIdx := p.typeUseParser.emptyTypeIndex(section, idx)
+		return p.endFunc(typeIdx, codeEnd, nil)
+	}
+	return nil, unexpectedToken(tok, tokenBytes)
+
 }
 
 // endFunc adds the type index, code and local names for the current function, and increments funcNamespace as it is

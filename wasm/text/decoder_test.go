@@ -39,6 +39,45 @@ func TestDecodeModule(t *testing.T) {
 			},
 		},
 		{
+			name: "func inlined import, nullary type match",
+			input: `(module
+	(func $main (import "test" "main"))
+	(type (func))
+)`,
+			expected: &wasm.Module{
+				TypeSection: []*wasm.FunctionType{v_v},
+				ImportSection: []*wasm.Import{{
+					Module: "test", Name: "main",
+					Kind:     wasm.ImportKindFunc,
+					DescFunc: 0,
+				}},
+				NameSection: &wasm.NameSection{
+					FunctionNames: wasm.NameMap{&wasm.NameAssoc{Index: 0, Name: "main"}},
+				},
+			},
+		},
+		{
+			name: "func inlined import, inlined type",
+			input: `(module
+	(func $runtime.fd_write (import "wasi_snapshot_preview1" "fd_write") (param i32 i32 i32 i32) (result i32))
+	(type (func))
+)`,
+			expected: &wasm.Module{
+				TypeSection: []*wasm.FunctionType{
+					v_v, // module types are always before inlined types
+					i32i32i32i32_i32,
+				},
+				ImportSection: []*wasm.Import{{
+					Module: "wasi_snapshot_preview1", Name: "fd_write",
+					Kind:     wasm.ImportKindFunc,
+					DescFunc: 1,
+				}},
+				NameSection: &wasm.NameSection{
+					FunctionNames: wasm.NameMap{&wasm.NameAssoc{Index: 0, Name: "runtime.fd_write"}},
+				},
+			},
+		},
+		{
 			name: "type func empty after inlined", // ensures the parser was reset properly
 			input: `(module
 	(import "wasi_snapshot_preview1" "fd_write" (func $runtime.fd_write (param i32 i32 i32 i32) (result i32)))
@@ -1792,7 +1831,7 @@ func TestParseModule_Errors(t *testing.T) {
 		{
 			name:        "func double param ID",
 			input:       "(module (func $baz $qux)))",
-			expectedErr: "1:20: redundant ID $qux in module.func[0]",
+			expectedErr: "1:20: redundant ID: $qux in module.func[0]",
 		},
 		{
 			name:        "func param ID clash",
