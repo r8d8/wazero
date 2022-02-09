@@ -89,20 +89,17 @@ func Test_environ_sizes_get_environ_get(t *testing.T) {
 	ctx := context.Background()
 	tests := []struct {
 		name            string
-		keys            []string
-		values          []string
+		environ         []string
 		expectedEnviron string
 	}{
 		{
 			name:            "empty",
-			keys:            []string{},
-			values:          []string{},
+			environ:         []string{},
 			expectedEnviron: "os.Environ: []",
 		},
 		{
 			name:            "simple",
-			keys:            []string{"foo", "bar", "baz"},
-			values:          []string{"FOO", "", "FOOBAR"},
+			environ:         []string{"foo=FOO", "bar=", "baz=FOOBAR"},
 			expectedEnviron: "os.Environ: [foo=FOO bar= baz=FOOBAR]",
 		},
 	}
@@ -118,7 +115,7 @@ func Test_environ_sizes_get_environ_get(t *testing.T) {
 			require.NoError(t, err)
 
 			stdoutBuf := bytes.NewBuffer(nil)
-			envOpt, err := wasi.Environ(tc.keys, tc.values)
+			envOpt, err := wasi.Environ(tc.environ)
 			require.NoError(t, err)
 			wasiEnv := wasi.NewEnvironment(envOpt, wasi.Stdout(stdoutBuf))
 

@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"os"
 	"reflect"
+	"strings"
 	"time"
 
 	"github.com/tetratelabs/wazero/wasm"
@@ -173,22 +174,20 @@ func Args(args []string) (Option, error) {
 	}, nil
 }
 
-// Environ returns an option to set environmental variables to the WASIEnvironment.
-// * keys: the names of environment variables to set
-// * values: the corresponding values of environment variables to set
-// Environ returns an error if the length of the keys and values doesn't match,
+// Environ returns an option to set environment variables to the WASIEnvironment.
+//  * environ: environment variables in the same format as that of `os.Environ`, where key/value pairs are joined with `=`.
+// See https://pkg.go.dev/os#Environ
+//
+// Environ returns an error if environ contains a string not joined with `=`,
 // or the length or the total size of those strings exceed the max of uint32.
-func Environ(keys []string, values []string) (Option, error) {
-	if len(keys) != len(values) {
-		return nil, fmt.Errorf("the length of the keys and the values don't match. len(keys): %v, len(values): %v", len(keys), len(values))
+// Note: Implicit environment variable propagation into WASI is intentionally not done.
+func Environ(environ []string) (Option, error) {
+	for i, env := range environ {
+		if !strings.Contains(env, "=") {
+			return nil, fmt.Errorf("environ[%v] is not joined with '=': %v", i, env)
+		}
 	}
-	// WASIEnvironment.environ stores the environment variables in the form of "key=value" as WASIStringArray,
-	// which is convenient for the implementation of environ_get.
-	envs := make([]string, len(keys))
-	for i, key := range keys {
-		envs[i] = key + "=" + values[i]
-	}
-	wasiStrings, err := newWASIStringArray(envs)
+	wasiStrings, err := newWASIStringArray(environ)
 	if err != nil {
 		return nil, err
 	}

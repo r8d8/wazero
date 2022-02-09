@@ -424,63 +424,49 @@ var environWat = []byte(`(module
 // common test cases used by TestWASIEnvironment_environ_sizes_get_Succeed and TestWASIEnvironment_environ_get_Succeed
 var environTests = []struct {
 	name                   string
-	keys                   []string
-	values                 []string
-	expectedEnviron        [][]byte
+	environ                []string
 	expectedEnvironBufSize uint32
 }{
 	{
 		name:                   "no environ",
-		keys:                   nil,
-		values:                 nil,
-		expectedEnviron:        [][]byte{},
+		environ:                nil,
 		expectedEnvironBufSize: 0,
 	},
 	{
 		name:                   "empty",
-		keys:                   []string{},
-		values:                 []string{},
-		expectedEnviron:        [][]byte{},
+		environ:                []string{},
 		expectedEnvironBufSize: 0,
 	},
 	{
-		name:   "simple",
-		keys:   []string{"foo", "bar", "baz"},
-		values: []string{"FOO", "BAR", "BAZ"},
-		expectedEnviron: [][]byte{
-			[]byte("foo=FOO\x00"),
-			[]byte("bar=BAR\x00"),
-			[]byte("baz=BAZ\x00"),
+		name: "simple",
+		environ: []string{
+			"foo=FOO",
+			"bar=BAR",
+			"baz=BAZ",
 		},
 		expectedEnvironBufSize: 24,
 	},
 	{
-		name:   "empty value",
-		keys:   []string{"foo"},
-		values: []string{""},
-		expectedEnviron: [][]byte{
-			[]byte("foo=\x00"),
+		name: "empty value",
+		environ: []string{
+			"foo=",
 		},
 		expectedEnvironBufSize: 5,
 	},
 	{
 		name: "utf-8 values",
 		// "😨", "🤣", and "️🏃‍♀️" have 4, 4, and 13 bytes respectively
-		keys:   []string{"foo", "bar"},
-		values: []string{"😨🤣🏃\u200d♀️", "BAR"},
-		expectedEnviron: [][]byte{
-			[]byte("foo=😨🤣🏃\u200d♀️\x00"),
-			[]byte("bar=BAR\x00"),
+		environ: []string{
+			"foo=😨🤣🏃\u200d♀️",
+			"bar=BAR",
 		},
 		expectedEnvironBufSize: 34,
 	},
 	{
-		name:   "invalid utf-8 string",
-		keys:   []string{"foo", "bar"},
-		values: []string{"\xff\xfe\xfd", "BAR"},
-		expectedEnviron: [][]byte{
-			[]byte("foo=\xff\xfe\xfd\x00"),
-			[]byte("bar=BAR\x00"),
+		name: "invalid utf-8 string",
+		environ: []string{
+			"foo=\xff\xfe\xfd",
+			"bar=BAR",
 		},
 		expectedEnvironBufSize: 16,
 	},
@@ -491,8 +477,8 @@ func TestWASIEnvironment_environ_sizes_get_Succeed(t *testing.T) {
 	for _, tt := range environTests {
 		tc := tt
 		opts := []Option{}
-		if tc.keys != nil {
-			environOpt, err := Environ(tc.keys, tc.values)
+		if tc.environ != nil {
+			environOpt, err := Environ(tc.environ)
 			require.NoError(t, err)
 			opts = append(opts, environOpt)
 		}
@@ -505,7 +491,7 @@ func TestWASIEnvironment_environ_sizes_get_Succeed(t *testing.T) {
 			ret, _, err := store.CallFunction(ctx, "test", "environ_sizes_get", uint64(environCountPtr), uint64(environBufSizePtr))
 			require.NoError(t, err)
 			require.Equal(t, uint64(ESUCCESS), ret[0]) // ret[0] is errno
-			require.Equal(t, uint32(len(tc.expectedEnviron)), binary.LittleEndian.Uint32(store.Memories[0].Buffer[environCountPtr:]))
+			require.Equal(t, uint32(len(tc.environ)), binary.LittleEndian.Uint32(store.Memories[0].Buffer[environCountPtr:]))
 			require.Equal(t, tc.expectedEnvironBufSize, binary.LittleEndian.Uint32(store.Memories[0].Buffer[environBufSizePtr:]))
 		})
 	}
@@ -516,8 +502,8 @@ func TestWASIEnvironment_environ_get_Succeed(t *testing.T) {
 	for _, tt := range environTests {
 		tc := tt
 		opts := []Option{}
-		if tc.keys != nil {
-			environOpt, err := Environ(tc.keys, tc.values)
+		if tc.environ != nil {
+			environOpt, err := Environ(tc.environ)
 			require.NoError(t, err)
 			opts = append(opts, environOpt)
 		}
@@ -526,15 +512,15 @@ func TestWASIEnvironment_environ_get_Succeed(t *testing.T) {
 
 		t.Run(tc.name, func(t *testing.T) {
 			// Serialize the expected result of environ_get
-			expectedEnviron := make([]byte, 4*len(tc.keys)) // expected size of the pointers to the environ. 4 is the size of uint32
-			environPtr := uint32(0)                         // arbitrary valid address
+			expectedEnviron := make([]byte, 4*len(tc.environ)) // expected size of the pointers to the environ. 4 is the size of uint32
+			environPtr := uint32(0)                            // arbitrary valid address
 			expectedEnvironBuf := make([]byte, tc.expectedEnvironBufSize)
 			environBufPtr := uint32(0x100) // arbitrary valid address that doesn't overwrap with environPtr
 			environBufWritten := uint32(0)
-			for i, env := range tc.expectedEnviron {
+			for i, env := range tc.environ {
 				binary.LittleEndian.PutUint32(expectedEnviron[environPtr+uint32(i*4):], environBufPtr+environBufWritten) // 4 is the size of uint32
 				copy(expectedEnvironBuf[environBufWritten:], env)
-				environBufWritten += uint32(len(env))
+				environBufWritten += uint32(len(env)) + 1 // +1 for the trailing null character
 			}
 
 			// Compare them
@@ -549,9 +535,8 @@ func TestWASIEnvironment_environ_get_Succeed(t *testing.T) {
 
 func TestWASIEnvironment_environ_sizes_get_ReturnError(t *testing.T) {
 	ctx := context.Background()
-	validEnvironKeys := []string{"foo", "bar", "baz"}   // arbitrary valid keys
-	validEnvironValues := []string{"FOO", "BAR", "BAZ"} // arbitrary valid values
-	environOpt, err := Environ(validEnvironKeys, validEnvironValues)
+	validEnviron := []string{"foo=FOO", "bar=BAR", "baz=BAZ"} // arbitrary valid environ
+	environOpt, err := Environ(validEnviron)
 	require.NoError(t, err)
 	wasiEnv := NewEnvironment(environOpt)
 	store := instantiateWasmStore(t, environWat, "test", wasiEnv)
@@ -599,9 +584,8 @@ func TestWASIEnvironment_environ_sizes_get_ReturnError(t *testing.T) {
 
 func TestWASIEnvironment_environ_get_ReturnError(t *testing.T) {
 	ctx := context.Background()
-	validEnvironKeys := []string{"foo", "bar", "baz"}   // arbitrary valid keys
-	validEnvironValues := []string{"FOO", "BAR", "BAZ"} // arbitrary valid values
-	environOpt, err := Environ(validEnvironKeys, validEnvironValues)
+	validEnviron := []string{"foo=FOO", "bar=BAR", "baz=BAZ"} // arbitrary valid environ
+	environOpt, err := Environ(validEnviron)
 	require.NoError(t, err)
 	wasiEnv := NewEnvironment(environOpt)
 	store := instantiateWasmStore(t, environWat, "test", wasiEnv)
@@ -650,58 +634,44 @@ func TestWASIEnvironment_environ_get_ReturnError(t *testing.T) {
 
 func TestEnviron(t *testing.T) {
 	tests := []struct {
-		name            string
-		keys            []string
-		values          []string
-		expectedEnviron []string
-		shouldSuceed    bool
+		name         string
+		environ      []string
+		shouldSuceed bool
 	}{
 		{
-			name:            "nil",
-			keys:            nil,
-			values:          nil,
-			expectedEnviron: []string{},
-			shouldSuceed:    true,
+			name:         "nil",
+			environ:      nil,
+			shouldSuceed: true,
 		},
 		{
-			name:            "empty envs",
-			keys:            []string{},
-			values:          []string{},
-			expectedEnviron: []string{},
-			shouldSuceed:    true,
+			name:         "empty envs",
+			environ:      []string{},
+			shouldSuceed: true,
 		},
 		{
-			name:            "simple envs",
-			keys:            []string{"foo", "bar", "baz"},
-			values:          []string{"FOO", "BAR", "FOOBAR"},
-			expectedEnviron: []string{"foo=FOO", "bar=BAR", "baz=FOOBAR"},
-			shouldSuceed:    true,
+			name:         "simple envs",
+			environ:      []string{"foo=FOO", "bar=BAR", "baz=FOOBAR"},
+			shouldSuceed: true,
 		},
 		{
-			name:   "value with equal sign",
-			keys:   []string{"foo", "bar"},
-			values: []string{"FOO=BAZ", "BAR"},
-			expectedEnviron: []string{
+			name: "value with equal sign",
+			environ: []string{
 				"foo=FOO=BAZ",
 				"bar=BAR",
 			},
 			shouldSuceed: true,
 		},
 		{
-			name:   "utf-8 values",
-			keys:   []string{"foo", "bar"},
-			values: []string{"😨🤣🏃\u200d♀️", "BAR"},
-			expectedEnviron: []string{
+			name: "utf-8 values",
+			environ: []string{
 				"foo=😨🤣🏃\u200d♀️",
 				"bar=BAR",
 			},
 			shouldSuceed: true,
 		},
 		{
-			name:   "invalid utf-8 values",
-			keys:   []string{"foo", "bar"},
-			values: []string{"\xff\xfe\xfd", "BAR"},
-			expectedEnviron: []string{
+			name: "invalid utf-8 values",
+			environ: []string{
 				"foo=\xff\xfe\xfd",
 				"bar=BAR",
 			},
@@ -709,10 +679,8 @@ func TestEnviron(t *testing.T) {
 		},
 		{
 			// this is valid but note that WASI doesn't explicitly specify the expected semantics of any environ
-			name:   "non-ascii keys",
-			keys:   []string{"😨🤣🏃\u200d♀️", "foo"},
-			values: []string{"utf-8", "FOO"},
-			expectedEnviron: []string{
+			name: "non-ascii keys",
+			environ: []string{
 				"😨🤣🏃\u200d♀️=utf-8",
 				"foo=FOO",
 			},
@@ -720,10 +688,8 @@ func TestEnviron(t *testing.T) {
 		},
 		{
 			// this is valid but note that WASI doesn't explicitly specify the expected semantics of any environ
-			name:   "duplicated keys",
-			keys:   []string{"foo", "foo", "baz"},
-			values: []string{"FOO1", "FOO2", "BAZ"},
-			expectedEnviron: []string{
+			name: "duplicated keys",
+			environ: []string{
 				"foo=FOO1",
 				"foo=FOO2",
 				"baz=BAZ",
@@ -732,19 +698,19 @@ func TestEnviron(t *testing.T) {
 		},
 		{
 			// this is valid but note that WASI doesn't explicitly specify the expected semantics of any environ
-			name:   "key with equal sign",
-			keys:   []string{"foo", "bar=baz"},
-			values: []string{"FOO", "BAR"},
-			expectedEnviron: []string{
+			name: "key with equal sign",
+			environ: []string{
 				"foo=FOO",
 				"bar=baz=BAR",
 			},
 			shouldSuceed: true,
 		},
 		{
-			name:         "fails if keys/values of different lengths are passed",
-			keys:         []string{"foo", "bar"},
-			values:       []string{"foo"},
+			name: "fails if environ doesn't contain '='",
+			environ: []string{
+				"foo=FOO",
+				"bar",
+			},
 			shouldSuceed: false,
 		},
 	}
@@ -753,7 +719,7 @@ func TestEnviron(t *testing.T) {
 		tc := tt
 
 		t.Run(tc.name, func(t *testing.T) {
-			environOpt, err := Environ(tc.keys, tc.values)
+			environOpt, err := Environ(tc.environ)
 			if !tc.shouldSuceed {
 				require.Error(t, err)
 				return
@@ -764,7 +730,7 @@ func TestEnviron(t *testing.T) {
 			wasiEnv := NewEnvironment(environOpt)
 
 			// construct the expected WASIStringArray value
-			expectedWasiStringArray, err := newWASIStringArray(tc.expectedEnviron)
+			expectedWasiStringArray, err := newWASIStringArray(tc.environ)
 			require.NoError(t, err)
 
 			// Compare them. Note that `require.Equal` does 'reflect.DeepEqual' internally.
